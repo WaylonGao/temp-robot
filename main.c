@@ -280,3 +280,98 @@ void halt(void){
     Rightmotor3A = 1;   //Right motor forward;
     Rightmotor4A = 1;
 }
+
+// Encoder functions from encoders-working.c
+
+void configEncoders() {
+    // Configure RC0 and RC5 as inputs for encoder reading
+    TRISCbits.TRISC0 = 1;
+    TRISCbits.TRISC5 = 1;
+
+    //read states to previous states
+    prevLeftState = PORTCbits.RC0;
+    prevRightState = PORTCbits.RC5;
+}
+
+void encoderTurn(int angle){
+    //Turns using encoders in deg
+    //Positive angle -> right turn
+    //Negative angle -> left turn
+    int steps = angleToEncoderSteps(angle);
+
+    if (angle > 0){
+        SpinRight();
+        int count = 0;
+        int state = PORTCbits.RC0; // initialize to actual state
+        int prevState = state;
+        while (count < steps){
+            state = PORTCbits.RC0; //read state of encoder
+            if (state != prevState){
+                count = count+1;
+            }
+            prevState = state; // update after the check
+        }
+        Stop();
+    }
+    else {
+        SpinLeft();
+        int count = 0;
+        int state = PORTCbits.RC0; // initialize to actual state
+        int prevState = state;
+        while (count < steps){
+            state = PORTCbits.RC0; //read state of encoder
+            if (state != prevState){
+                count = count+1;
+            }
+            prevState = state; // update after the check
+        }
+        Stop();
+    }
+}
+
+int angleToEncoderSteps(int angle){
+    //Converts angle in deg to encoder steps
+    //Returns number of encoder steps for given angle
+    //Divide angle by 360 and multiply by number of steps per full rotation
+    int stepsRotMagicNumber = 800;
+
+    // Fixed logic: must multiply before dividing to avoid integer truncation to 0
+    return (stepsRotMagicNumber * angle) / 360;
+}
+
+void SpinRight(void){        //set H bridge to make robot spin to the right
+    Leftmotor1A = 0;
+    Leftmotor2A = 1;
+    Rightmotor3A = 1;
+    Rightmotor4A = 0;
+
+    // Added PWM to move the motors
+    CCP1CON = (0x0c)|((markspaceL&0x03)<<4);
+    CCPR1L = markspaceL>>2;
+    CCP2CON = (0x0c)|((markspaceR&0x03)<<4);
+    CCPR2L = markspaceR>>2;
+}
+
+void SpinLeft(void){          //set H bridge to make robot spin to the left
+    Leftmotor1A = 1;
+    Leftmotor2A = 0;
+    Rightmotor3A = 0;
+    Rightmotor4A = 1;
+
+    // Added PWM to move the motors
+    CCP1CON = (0x0c)|((markspaceL&0x03)<<4);
+    CCPR1L = markspaceL>>2;
+    CCP2CON = (0x0c)|((markspaceR&0x03)<<4);
+    CCPR2L = markspaceR>>2;
+}
+
+void Stop(void){               //set H bridge to make robot stop
+    Leftmotor1A = 1;
+    Leftmotor2A = 1;
+    Rightmotor3A = 1;
+    Rightmotor4A = 1;
+
+    // Drop PWM to 0
+    CCPR1L = 0;
+    CCPR2L = 0;
+}
