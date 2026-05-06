@@ -1,0 +1,216 @@
+/* File:  pwm10bit_2.c
+ * Author: Craig Bacon
+ * Created on 05 Jan 2017, 14:30
+ * Mark space ratio is 10 bit (0-1023) and the PWM frequency is 610 Hz
+ * PWM Period = (PR2+1)x4 x 1/Osc x TMR2 Prescaler
+ * e.g (255+1)x4 x1/10Mhz x 16 =1.638ms or 610Hz.PR2 changes frequency.
+ * The 10bit markspace ratio is placed in: 2 LSB in bits 4,5 of CCP1CON and
+ * the higher 8 bits in CCPR1L. Duplicated for CCP2CON and CCPR2L,Both motors
+ * turn forward. markspaceL Left motor speed, markspaceR Right motor speed
+ */
+
+#define _XTAL_FREQ 10000000 // Needed to use __delay_ms()
+
+#include <xc.h>
+#include <stdio.h>
+#include <stdlib.h>
+#pragma config OSC = HS     //High speed resonator
+#pragma config WDT = OFF    //watchdog timer off
+#pragma config LVP = OFF    //Low voltage programmer disabled
+#pragma config PWRT = ON    //Power up timer on
+#define Leftmotor1A LATAbits.LA4    //Direction bits Left motor
+#define Leftmotor2A LATAbits.LA5
+#define Rightmotor3A LATBbits.LB0   //Direction bits Right motor
+#define Rightmotor4A LATBbits.LB1
+
+void SpinRight(void);
+void SpinLeft(void);        // Added missing prototype
+void Stop(void);            // Added missing prototype
+void configPWM(void);       //Configure PWM
+void goforward(void);       //Turn both motors forward
+void configEncoders(void);  // Added missing prototype
+void encoderSpin(int spinLength); // Added type
+void encoderTurn(int angle);// Added missing prototype
+int angleToEncoderSteps(int angle); // Added missing prototype
+
+unsigned int markspaceL;    //Mark space ratio for Left motor
+unsigned int markspaceR;    //Mark space ratio for Right motor
+
+int spinLength = 100; //number of encoder steps to spin
+
+//FOR ENCODERS:
+
+int leftPulseCnt = 0;
+int rightPulseCnt = 0;
+
+int prevLeftState = 0;
+int prevRightState = 0;
+
+int main(void)
+{
+    ADCON1 = 0b00001101;    //AN0,AN1 are analogue inputs,RA2 -RA5 are digital
+    TRISA = 0b11001111;    //Set PORTA pins
+    TRISB = 0;                   //Set all PORTB pins to outputs
+    TRISC = 0b00111001;    //Set PORTC pins
+    LATB = 0;                //Turn LEDs off
+    configPWM();              //Configure PWM
+    configEncoders();           //Configure encoders
+
+    markspaceL=250;   //Left motor speed
+    markspaceR=250;   //Right motor speed
+
+    // --- NEW SEQUENCE ---
+    
+    // 1. Go forwards for 1 second, then stop
+    goforward();
+    __delay_ms(1000);
+    Stop();
+    __delay_ms(500); // Brief pause to let momentum settle
+
+    // 2. Encoder turn left 90 deg
+    encoderTurn(-90);
+    __delay_ms(500); // Brief pause
+
+    // 3. Encoder turn right 90 deg
+    encoderTurn(90);
+
+    // 4. Stop and flash all LEDs when done
+    Stop();
+    
+    while(1){
+        // Toggle upper 6 bits of PORTB (LEDs) without overwriting LB0/LB1 (motors)
+        LATB ^= 0b11111100; 
+        __delay_ms(500);
+    }
+}
+
+void configPWM(void){   //Configures PWM
+    PR2 = 0b11111111 ;     //set period of PWM,610Hz
+    T2CON = 0b00000111 ;   //Timer 2(TMR2)on, prescaler = 16
+    CCP1CON = 0b00001100;  //enable CCP1 PWM
+    CCP2CON = 0b00001100;  //enable CCP2 PWM
+    CCPR1L = 0;            //turn left motor off
+    CCPR2L = 0;            //turn Right motor off
+    return;
+}
+
+void configEncoders() {
+    //FOR ENCODERS
+    // Configure RC0 and RC5 as inputs for encoder reading
+    TRISCbits.TRISC0 = 1;
+    TRISCbits.TRISC5 = 1;
+    
+    //read states to previous states
+    prevLeftState = PORTCbits.RC0;
+    prevRightState = PORTCbits.RC5;
+}
+
+void goforward(void){
+    Leftmotor1A = 0;    //Left motor forward;
+    Leftmotor2A = 1;
+    Rightmotor3A = 0;   //Right motor forward;
+    Rightmotor4A = 1;
+    CCP1CON = (0x0c)|((markspaceL&0x03)<<4);//0x0c enables PWM,then insert the 2 LSB
+    CCPR1L = markspaceL>>2; //of markspaceL into CCP1CON and the higher 8 bits into
+    CCP2CON = (0x0c)|((markspaceR&0x03)<<4); //CCPR1L.  Same as above but for
+    CCPR2L = markspaceR>>2;                  // CCP2CON and CCPR2L
+    return;
+}
+
+void encoderSpin(int spinLength){
+    SpinRight();
+    int count = 0;
+    int state = PORTCbits.RC0; // initialize to actual state
+    int prevState = state; 
+    while (count < spinLength){
+        state = PORTCbits.RC0; //read state of encoder
+        if (state != prevState){
+            count = count+1;
+        }
+        prevState = state; // update after the check
+    }
+    Stop();
+}
+
+void encoderTurn(int angle){
+    //Turns using encoders in deg
+    //Positive angle -> right turn
+    //Negative angle -> left turn
+    int steps = angleToEncoderSteps(angle);
+    
+    if (angle > 0){
+        SpinRight();
+        int count = 0;
+        int state = PORTCbits.RC0; // initialize to actual state
+        int prevState = state; 
+        while (count < steps){
+            state = PORTCbits.RC0; //read state of encoder
+            if (state != prevState){
+                count = count+1;
+            }
+            prevState = state; // update after the check
+        }
+        Stop();
+    }
+    else {
+        SpinLeft();
+        int count = 0;
+        int state = PORTCbits.RC0; // initialize to actual state
+        int prevState = state; 
+        while (count < steps){
+            state = PORTCbits.RC0; //read state of encoder
+            if (state != prevState){
+                count = count+1;
+            }
+            prevState = state; // update after the check
+        }
+        Stop();
+    }
+}
+
+int angleToEncoderSteps(int angle){
+    //Converts angle in deg to encoder steps
+    //Returns number of encoder steps for given angle
+    //Divide angle by 360 and multiply by number of steps per full rotation
+    int stepsRotMagicNumber=800;    
+    
+    // Fixed logic: must multiply before dividing to avoid integer truncation to 0
+    return stepsRotMagicNumber * 0.226; 
+}
+
+void SpinRight(void){        //set H bridge to make robot spin to the right
+    Leftmotor1A = 0;
+    Leftmotor2A = 1;
+    Rightmotor3A = 1;
+    Rightmotor4A = 0;
+    
+    // Added PWM to move the motors
+    CCP1CON = (0x0c)|((markspaceL&0x03)<<4);
+    CCPR1L = markspaceL>>2; 
+    CCP2CON = (0x0c)|((markspaceR&0x03)<<4); 
+    CCPR2L = markspaceR>>2;
+}
+
+void SpinLeft(void){          //set H bridge to make robot spin to the left
+    Leftmotor1A = 1;
+    Leftmotor2A = 0;
+    Rightmotor3A = 0;
+    Rightmotor4A = 1;
+    
+    // Added PWM to move the motors
+    CCP1CON = (0x0c)|((markspaceL&0x03)<<4);
+    CCPR1L = markspaceL>>2; 
+    CCP2CON = (0x0c)|((markspaceR&0x03)<<4); 
+    CCPR2L = markspaceR>>2;
+}
+
+void Stop(void){               //set H bridge to make robot stop
+    Leftmotor1A = 1;
+    Leftmotor2A = 1;
+    Rightmotor3A = 1;
+    Rightmotor4A = 1;
+    
+    // Drop PWM to 0
+    CCPR1L = 0;
+    CCPR2L = 0;
+}
